@@ -1,7 +1,7 @@
 import numpy as np 
 import cv2 
 import matplotlib.pyplot as plt 
-
+import scipy.signal
 
 from os import listdir
 from os.path import isfile, join
@@ -85,7 +85,7 @@ class ImageStream:
 
 		if not ROS:
 			print "OpenCV version :  {0}".format(cv2.__version__)
-			self.DIR = 'outdoors/'			
+			self.DIR = 'beckman/'			
 			self.imageFiles = [f for f in listdir(self.DIR) if isfile(join(self.DIR, f))]
 		else:
 			pass
@@ -102,8 +102,8 @@ class DataStream:
 
 	def __init__(self, rate=8.226, ROS=False):
 		if not ROS:
-			self.DIR = 'outdoors/data/'
-			self.angular = np.loadtxt(open(self.DIR + "angular.csv", "rb"), delimiter=",", skiprows=0)[10:]
+			self.DIR = 'beckman/data/'
+			self.angular = np.loadtxt(open(self.DIR + "angular.csv", "rb"), delimiter=",", skiprows=0)
 			self.time = np.loadtxt(open(self.DIR +"time.csv", "rb"), delimiter=",", skiprows=0)	
 			self.length = len(self.time)
 			self.i = 0
@@ -124,12 +124,6 @@ def featureTracker(tracker, matcher, currImg, nextImg):
 	# find the keypoints and descriptors with tracker
 	kp1, des1 = tracker.compute(currImg, kp1)
 	kp2, des2 = tracker.compute(nextImg, kp2)
-
-	# tCurr = cv2.drawKeypoints(currImg, kp1[:10], None, color=(0,255,0), flags=4)
-	# plt.imshow(tCurr), plt.show()
-
-	# tNext = cv2.drawKeypoints(nextImg, kp2[:10], None, color=(0,255,0), flags=4)
-	# plt.imshow(tNext), plt.show()
 
 	# Match descriptors.
 	matches = matcher.match(des1, des2)
@@ -160,19 +154,14 @@ def flow(matches, kp1, kp2):
 		(x1,y1) = feature1.pt
 		(x2,y2) = feature2.pt
 
-		theta1 = feature1.angle
-		theta2 = feature2.angle
-
-		dT += theta2 - theta1
 		dX += x2 - x1
 		dY += y2 - y1
 
-	dT /= len(matches)
 	dX /= len(matches)
 	dY /= len(matches)
 
-	return -dT, -(dX / 640.0) * 1.0, (dY/360.0) * 0.8, matchedkp1, matchedkp2
-
+	# return -(dX / 640.0) * 1.0, (dY/360.0) * 0.8, matchedkp1, matchedkp2
+	return -(dX / 640.0) * 4.1, (dY/360.0) * 3.9, matchedkp1, matchedkp2
 def updatePosition(dX, dY, x, y, theta):
 
 	x += -dY*np.sin(theta) + dX * np.cos(theta)
@@ -188,9 +177,11 @@ def run():
 
 	# plt.ion()
 	# ax = plt.gca()
-
+	position = np.loadtxt(open("beckman/data/position.csv", "rb"), delimiter=",", skiprows=0)	
+	plt.plot(position[:,1], position[:,0], label='True path')
+	
 	stream = ImageStream(ROS=False)
-	dStream = DataStream(rate=8.226, ROS=False)
+	dStream = DataStream(rate=11.56, ROS=False)
 	# Initiate STAR detector
 	orb = cv2.ORB()
 	# create BFMatcher object
@@ -204,36 +195,37 @@ def run():
 	theta = V[2] * dt 
 	
 	c = 0
-	while stream.hasImage() and dStream.hasNext():
+	while stream.hasImage() and dStream.hasNext() and c < 382:
 		
 		nextImg = stream.getImage()
 		dt, V = dStream.getNext()
 		theta += V[2] * dt 
-
 		kp1, kp2, des1, des2, matches = featureTracker(orb, bf, currImg, nextImg)
 		
-		dTheta, dX, dY, matchedkp1, matchedkp2 = flow(matches[:30], kp1, kp2)
+		dX, dY, matchedkp1, matchedkp2 = flow(matches[:30], kp1, kp2)
 
 		position = updatePosition(dX, dY, x[-1], y[-1], theta)
 		
 		x.append(position[0][0])
 		y.append(position[1][0])
 		
-		# ax.plot(x, y)
-		# plt.pause(0.0001)
-		# plt.draw()
 		print c
 		c += 1
-		#img = drawMatches(currImg,kp1,nextImg,kp2,matches[:30])
-
 		currImg = nextImg
 
-
-	plt.plot(x, y)
-	plt.title('Path of drone outlining the patch of grass outside Gates Thomas')
+	
+	xy = np.array([x, y])
+	xy = scipy.signal.wiener(xy, (1, 15))
+	x = xy[0]
+	y = xy[1]
+	plt.plot(x, y, label='Measured path')
+	plt.title('Path of drone outlining the patch of grass outside Beckman (Smoothed)')
+	plt.legend(loc='lower left')
 	plt.xlabel('x')
 	plt.ylabel('y')
 	plt.show()
+
+
 
 
 run()
